@@ -1,100 +1,61 @@
 import akka.actor._
+import scala.concurrent.Await
 import akka.pattern.ask
 import akka.util.Timeout
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
-import scala.util.{Success, Failure}
+import scala.util.{ Success, Failure }
 
-object UnixFileSystemLike {
-  case class AddUser(name: String)
-  case class Who(name: String)
-  case class Iam(name: String)
-  case class UserNotFound(name: String)
-
-  def resolve(context: ActorRefFactory, name: String, m: Any): Unit = {
-    FullUserResolver(context).resolve(name, m)
-    AbstractUserResolver(context).resolve(name, m)
-    RelativeUserResolver(context).resolve(name, m)
-    CurrentUserResolver(context).resolve(name, m)
-  }
-  
-  abstract class UserResolver(context: ActorRefFactory) {
-    def resolve(name: String, msg: Any) = {
-      val sel = getSelection(name)
-      def debug(buf: Any) = println(s"${getClass.getSimpleName}#resolve($name)$buf")
-
-      implicit val timeout = Timeout(1.second)
-      sel.resolveOne().onComplete {
-        case Success(ref) =>
-          debug(s"found: ${ref.path} [${ref.getClass.getSimpleName}]")
-          sel.ask(msg).onComplete {
-            case Success(m) => debug(m)
-            case Failure(m) => debug(m)
-          }
-        case Failure(ex)  => debug(ex)
-      }
-    }
-    protected def getSelection(name: String): ActorSelection
-  }
-
-  case class FullUserResolver(context: ActorRefFactory) extends UserResolver(context) {
-    def getSelection(name: String) = context.actorSelection(s"akka://test/user/home/$name")
-  }
-
-  case class AbstractUserResolver(context: ActorRefFactory) extends UserResolver(context) {
-    def getSelection(name: String) = context.actorSelection(s"/user/home/$name")
-  }
-
-  case class RelativeUserResolver(context: ActorRefFactory) extends UserResolver(context) {
-    def getSelection(name: String) = context.actorSelection(s"../home/$name")
-  }
-
-  case class CurrentUserResolver(context: ActorRefFactory) extends UserResolver(context) {
-    def getSelection(name: String) = context.actorSelection(name)
-  }
-
-  class Etc extends Actor {
-    override def receive: Receive = {
-      case m @ Who(name) => resolve(context, name, m)
-      case _ => Iam("/etc")
-    }
-  }
-
-  class Home extends Actor {
-    override def receive: Receive = {
-      case m @ Who(name) => resolve(context, name, m)
-      case AddUser(name) => context.actorOf(Props(new User(name)), name)
-    }
-  }
-
-  class User(name: String) extends Actor {
-    override def preStart(): Unit = {
-      println(s"User($name) created: path='${self.path}'")
-    }
-
-    override def receive: Receive = {
-      case m @ Who(name) => sender() ! Iam(name)
-    }
-  }
-}
+import scala.concurrent.ExecutionContext.Implicits.global
 
 object Main {
-  import UnixFileSystemLike._
+  case class Create(name: String)
+  case class Find(msg: String)
+  case class Found(msg: String)
+
+  val p = Props[Node]
+
+  class Node extends Actor {
+    def receive = {
+      case Create(name) => sender() ! context.actorOf(p, name)
+      case Find(msg)    => sender() ! Found(msg)
+    }
+  }
+
+  class Lookup extends Actor {
+    def receive = {
+      case name: String => sender() ! context.actorSelection(name)
+    }
+  }
 
   def main(args: Array[String]): Unit = {
+
+    implicit val timeout = Timeout(1.second)
+
     val system = ActorSystem("test")
-    val etc    = system.actorOf(Props[Etc] , name = "etc")
-    val home   = system.actorOf(Props[Home], name = "home")
+    val c1 = system.actorOf(p, "c1")
+    val c2 = system.actorOf(p, "c2")
 
-    // setup
-    val name = "maiha"
-    home ! AddUser(name)
+    val future = c2 ? Create("c21")
+    val result = Await.result(future, timeout.duration).asInstanceOf[ActorRef]
 
-    // lookup user by given resolver
-    etc  ! Who(name)
-    home ! Who(name)
+    val lookup = system.actorOf(Props[Lookup], "lookup")
 
-    // teardown
+    def execute(name: String) {
+      for {
+        sel   <- ask(lookup, name).mapTo[ActorSelection]
+        found <- ask(sel, Find(name)).mapTo[Found]
+      } yield {
+        println(found)
+      }
+    }
+
+    for {
+      name <- Seq("c1","c2","c2/c21")
+      path <- Seq("", "../", "/user/", "akka://test/user/")
+    } yield execute(path + name)
+
+    Thread.sleep(3000)
+
     system.shutdown
   }
 }
