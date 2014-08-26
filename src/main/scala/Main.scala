@@ -33,19 +33,27 @@ object Main {
 
     implicit val timeout = Timeout(1.second)
 
-    val system = ActorSystem("test")
-    systems.add(system)
+    val systems = Seq("sys1", "sys2").map(ActorSystem(_))
+    val c1s     = systems.map{_.actorOf(p, "c1")}
 
-    val c1 = system.actorOf(p, "c1")
-    val c2 = system.actorOf(p, "c2")
+    val p1 = systems(0).actorOf(p, "p1")
 
-    val future = c2 ? Create("c21")
-    val result = Await.result(future, timeout.duration).asInstanceOf[ActorRef]
+    for {
+      sys <- systems
+      uri <- Seq("akka://sys1/user/n1", "akka://sys2/user/n1")
+    } yield {
+      val path = ActorPath.fromString(uri)
+      val sel  = sys.actorSelection(path)
+      println(s"(in ${sys.name}) resolve($path) -> $sel")
+    }
 
-    def execute(lookup: ActorRef, name: String) {
-      println(s"execute: $name")
+//    val future = c2 ? Create("c21")
+//    val result = Await.result(future, timeout.duration).asInstanceOf[ActorRef]
+
+    def execute(ref: ActorRef, name: String) {
+      println(s"[${ref.getClass.getSimpleName}]$ref: execute($name)")
       for {
-        sel   <- ask(lookup, name).mapTo[ActorSelection]
+        sel   <- ask(ref, name).mapTo[ActorSelection]
 //        found <- ask(sel, Find(name)).mapTo[Found]
       } yield {
         println(sel)
@@ -53,23 +61,14 @@ object Main {
       }
     }
 
-//    val lookup = system.actorOf(Props[Lookup], "lookup")
-    val lookup = anotherSystemLookup
-
     for {
-      name <- Seq("c1","c2","c2/c21")
-      path <- Seq("", "../", "/user/", "akka://test/user/")
-    } yield execute(lookup, path + name)
+      ref  <- Seq(p1) // c1s
+      name <- Seq("c1","c2")
+      path <- Seq("", "../", "/user/", "akka://sys1/user/")
+    } yield execute(ref, path + name)
 
     Thread.sleep(5000)
 
-    for (s <- systems) yield s.shutdown
-  }
-
-  def anotherSystemLookup = {
-    val system = ActorSystem("another")
-    systems.add(system)
-    val lookup = system.actorOf(Props[Lookup], "lookup")
-    lookup
+    systems.map(_.shutdown)
   }
 }
