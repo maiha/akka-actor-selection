@@ -27,35 +27,49 @@ object Main {
     }
   }
 
+  val systems = scala.collection.mutable.Set[ActorSystem]()
+
   def main(args: Array[String]): Unit = {
 
     implicit val timeout = Timeout(1.second)
 
     val system = ActorSystem("test")
+    systems.add(system)
+
     val c1 = system.actorOf(p, "c1")
     val c2 = system.actorOf(p, "c2")
 
     val future = c2 ? Create("c21")
     val result = Await.result(future, timeout.duration).asInstanceOf[ActorRef]
 
-    val lookup = system.actorOf(Props[Lookup], "lookup")
-
-    def execute(name: String) {
+    def execute(lookup: ActorRef, name: String) {
+      println(s"execute: $name")
       for {
         sel   <- ask(lookup, name).mapTo[ActorSelection]
-        found <- ask(sel, Find(name)).mapTo[Found]
+//        found <- ask(sel, Find(name)).mapTo[Found]
       } yield {
-        println(found)
+        println(sel)
+//        println(found)
       }
     }
+
+//    val lookup = system.actorOf(Props[Lookup], "lookup")
+    val lookup = anotherSystemLookup
 
     for {
       name <- Seq("c1","c2","c2/c21")
       path <- Seq("", "../", "/user/", "akka://test/user/")
-    } yield execute(path + name)
+    } yield execute(lookup, path + name)
 
-    Thread.sleep(3000)
+    Thread.sleep(5000)
 
-    system.shutdown
+    for (s <- systems) yield s.shutdown
+  }
+
+  def anotherSystemLookup = {
+    val system = ActorSystem("another")
+    systems.add(system)
+    val lookup = system.actorOf(Props[Lookup], "lookup")
+    lookup
   }
 }
