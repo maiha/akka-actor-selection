@@ -12,6 +12,7 @@ object UnixFileSystemLike {
   case class UserNotFound(name: String)
 
   def resolve(context: ActorRefFactory, name: String, m: Any): Unit = {
+    FullUserResolver(context).resolve(name, m)
     AbstractUserResolver(context).resolve(name, m)
     RelativeUserResolver(context).resolve(name, m)
     CurrentUserResolver(context).resolve(name, m)
@@ -34,6 +35,10 @@ object UnixFileSystemLike {
       }
     }
     protected def getSelection(name: String): ActorSelection
+  }
+
+  case class FullUserResolver(context: ActorRefFactory) extends UserResolver(context) {
+    def getSelection(name: String) = context.actorSelection(s"akka://test/user/home/$name")
   }
 
   case class AbstractUserResolver(context: ActorRefFactory) extends UserResolver(context) {
@@ -63,6 +68,10 @@ object UnixFileSystemLike {
   }
 
   class User(name: String) extends Actor {
+    override def preStart(): Unit = {
+      println(s"User($name) created: path='${self.path}'")
+    }
+
     override def receive: Receive = {
       case m @ Who(name) => sender() ! Iam(name)
     }
